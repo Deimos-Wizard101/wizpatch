@@ -22,7 +22,8 @@ fn usage() {
                                     (e.g. V_r800683.Wizard_1_610)\n\
            --download-missing       Download files missing locally (default: on)\n\
            --no-download-missing    Only update files already present\n\
-           --jobs <N>               Parallel download workers (default: 5)\n\
+           --jobs <N>               Max parallel download workers (default: 5)\n\
+           -v, --verbose            Print per-file completions and controller stats\n\
            -h, --help               Print this help"
     );
 }
@@ -67,6 +68,7 @@ async fn run(args: Vec<String>) -> Result<(), WizPatchError> {
     let mut game_path: Option<PathBuf> = None;
     let mut platform: Option<Platform> = None;
     let mut jobs: usize = 5;
+    let mut verbose = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -126,6 +128,7 @@ async fn run(args: Vec<String>) -> Result<(), WizPatchError> {
                         WizPatchError::Protocol("--jobs needs a positive integer".into())
                     })?;
             }
+            "-v" | "--verbose" => verbose = true,
             "-h" | "--help" | "help" => {
                 usage();
                 return Ok(());
@@ -170,6 +173,7 @@ async fn run(args: Vec<String>) -> Result<(), WizPatchError> {
         download_missing,
         game_path,
         jobs,
+        verbose,
     };
 
     let stats = patch(&opts).await?;

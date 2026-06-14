@@ -122,12 +122,18 @@ pub async fn get_url_data(
 
 /// Streams an HTTP GET directly into a file on disk in fixed-size chunks.
 /// Constant memory regardless of file size. Creates parent directories.
+///
+/// If `progress` is provided, each chunk's byte count is added to it as it's
+/// written, so a sampler can observe live throughput rather than waiting for
+/// the whole file to land.
 pub async fn download_to_file(
     agent: &ureq::Agent,
     url: &str,
     dest: std::path::PathBuf,
+    progress: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
 ) -> Result<u64, WizPatchError> {
     use std::io::{Read, Write};
+    use std::sync::atomic::Ordering;
 
     let agent = agent.clone();
     let url = url.to_string();
@@ -151,6 +157,9 @@ pub async fn download_to_file(
             }
             file.write_all(&buf[..n])?;
             total += n as u64;
+            if let Some(p) = &progress {
+                p.fetch_add(n as u64, Ordering::Relaxed);
+            }
         }
         file.flush()?;
         Ok(total)
