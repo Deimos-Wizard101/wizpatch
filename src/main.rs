@@ -7,11 +7,14 @@ fn usage() {
     eprintln!(
         "wizpatch — Wizard101 patcher\n\
          \n\
-         Usage: wizpatch [options] --path <DIR>\n\
+         Usage: wizpatch [options]\n\
          \n\
          Options:\n\
          \n\
-           --path <DIR>             Game install directory (required)\n\
+           --path <DIR>             Game install directory\n\
+                                    (auto-detected on macOS/Windows; required on Linux)\n\
+           --platform <p>           windows|mac|steam\n\
+                                    (default: mac on macOS, windows elsewhere)\n\
            --patch                  Run patch (default: on)\n\
            --no-patch               Do not patch (no-op invocation)\n\
            --country <us|eu>        Patch server region (default: us)\n\
@@ -22,6 +25,30 @@ fn usage() {
            --jobs <N>               Parallel download workers (default: 5)\n\
            -h, --help               Print this help"
     );
+}
+
+fn default_platform() -> Platform {
+    if cfg!(target_os = "macos") {
+        Platform::MacOs
+    } else {
+        Platform::Windows
+    }
+}
+
+fn default_game_path(platform: Platform) -> Option<PathBuf> {
+    let candidates: Vec<PathBuf> = if cfg!(target_os = "macos") {
+        vec![PathBuf::from("/Applications/Wizard101")]
+    } else if cfg!(target_os = "windows") {
+        let non_steam = PathBuf::from(r"C:\ProgramData\KingsIsle Entertainment\Wizard101");
+        let steam = PathBuf::from(r"C:\Program Files (x86)\Steam\steamapps\common\Wizard101");
+        match platform {
+            Platform::Steam => vec![steam, non_steam],
+            _ => vec![non_steam, steam],
+        }
+    } else {
+        return None;
+    };
+    candidates.into_iter().find(|p| p.is_dir())
 }
 
 fn main() {
@@ -38,6 +65,7 @@ async fn run(args: Vec<String>) -> Result<(), WizPatchError> {
     let mut country = Country::Us;
     let mut revision: Option<String> = None;
     let mut game_path: Option<PathBuf> = None;
+    let mut platform: Option<Platform> = None;
     let mut jobs: usize = 5;
 
     let mut i = 0;
@@ -58,6 +86,19 @@ async fn run(args: Vec<String>) -> Result<(), WizPatchError> {
                         )));
                     }
                 };
+            }
+            "--platform" => {
+                i += 1;
+                platform = Some(match args.get(i).map(String::as_str) {
+                    Some("windows") => Platform::Windows,
+                    Some("mac") | Some("macos") => Platform::MacOs,
+                    Some("steam") => Platform::Steam,
+                    other => {
+                        return Err(WizPatchError::Protocol(format!(
+                            "unknown platform: {other:?}"
+                        )));
+                    }
+                });
             }
             "--revision" => {
                 i += 1;
@@ -103,15 +144,27 @@ async fn run(args: Vec<String>) -> Result<(), WizPatchError> {
         return Ok(());
     }
 
-    let Some(game_path) = game_path else {
-        eprintln!("Error: --path is required.");
-        usage();
-        process::exit(1);
+    let platform = platform.unwrap_or_else(default_platform);
+
+    let game_path = match game_path {
+        Some(p) => p,
+        None => match default_game_path(platform) {
+            Some(p) => {
+                println!("Auto-detected install: {}", p.display());
+                p
+            }
+            None => {
+                eprintln!(
+                    "Error: could not auto-detect a Wizard101 install on this OS — pass --path <DIR>."
+                );
+                process::exit(1);
+            }
+        },
     };
 
     let opts = PatchOptions {
         game: Game::Wizard101,
-        platform: Platform::Windows,
+        platform,
         country,
         revision,
         download_missing,
