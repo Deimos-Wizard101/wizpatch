@@ -1,8 +1,5 @@
 # wizpatch
 
-Rust port of the [wizdiff](https://pypi.org/project/wizdiff/) library, scoped
-to what is needed to patch Wizard101.
-
 ## Library
 
 ```rust
