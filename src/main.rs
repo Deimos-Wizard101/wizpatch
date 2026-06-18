@@ -1,13 +1,32 @@
 use std::path::PathBuf;
 use std::process;
 
-use wizpatch::{patch, Country, Game, PatchOptions, Platform, WizPatchError};
+use wizpatch::{patch, Country, Game, Mode, PatchOptions, Platform, WizPatchError};
 
 fn usage() {
     eprintln!(
         "wizpatch — Wizard101 patcher\n\
          \n\
-         Usage: wizpatch [options]\n\
+         Usage: wizpatch <command> [globs...] [options]\n\
+         \n\
+         Commands:\n\
+         \n\
+           patch                    CRC-check local files and download the\n\
+                                    missing/changed ones (the default workflow)\n\
+           download                 Force-download files, ignoring local CRC\n\
+                                    (use to repair/refetch)\n\
+           search                   Print file-list entries matching the globs;\n\
+                                    download nothing\n\
+         \n\
+         Globs (positional, repeatable) select which files a command acts on.\n\
+         A pattern with no wildcard is a case-insensitive substring match; one\n\
+         with '*' or '?' is a glob where '*' spans '/'. With no glob, patch and\n\
+         download act on the whole file list. search requires at least one.\n\
+         \n\
+         Examples:\n\
+           wizpatch patch\n\
+           wizpatch download 'Data/GameData/*.wad'\n\
+           wizpatch search Root.wad\n\
          \n\
          Options:\n\
          \n\
@@ -15,14 +34,13 @@ fn usage() {
                                     (auto-detected on macOS/Windows; required on Linux)\n\
            --platform <p>           windows|mac|steam\n\
                                     (default: mac on macOS, windows elsewhere)\n\
-           --patch                  Run patch (default: on)\n\
-           --no-patch               Do not patch (no-op invocation)\n\
            --country <us|eu>        Patch server region (default: us)\n\
            --revision <STR>         Pin a specific revision\n\
                                     (e.g. V_r800683.Wizard_1_610)\n\
-           --download-missing       Download files missing locally (default: on)\n\
-           --no-download-missing    Only update files already present\n\
-           --jobs <N>               Max parallel download workers (default: 5)\n\
+           --no-download-missing    Patch only files already present locally\n\
+                                    (patch mode only)\n\
+           --jobs <N>               Max parallel large-file downloads (default: 8)\n\
+           --small-jobs <N>         Parallel small-file downloads (default: 64)\n\
            -v, --verbose            Print per-file completions and controller stats\n\
            -h, --help               Print this help"
     );
@@ -61,20 +79,36 @@ fn main() {
 }
 
 async fn run(args: Vec<String>) -> Result<(), WizPatchError> {
-    let mut do_patch = true;
+    // First token is the command (or a help flag).
+    let mut i = 0;
+    let mode = match args.first().map(String::as_str) {
+        Some("patch") => Mode::Patch,
+        Some("download") => Mode::Download,
+        Some("search") => Mode::Search,
+        Some("-h") | Some("--help") | Some("help") | None => {
+            usage();
+            return Ok(());
+        }
+        Some(other) => {
+            eprintln!("Unknown command: {other}");
+            usage();
+            process::exit(1);
+        }
+    };
+    i += 1;
+
     let mut download_missing = true;
     let mut country = Country::Us;
     let mut revision: Option<String> = None;
     let mut game_path: Option<PathBuf> = None;
     let mut platform: Option<Platform> = None;
-    let mut jobs: usize = 5;
+    let mut jobs: usize = 8;
+    let mut small_jobs: usize = 64;
     let mut verbose = false;
+    let mut globs: Vec<String> = Vec::new();
 
-    let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--patch" => do_patch = true,
-            "--no-patch" => do_patch = false,
             "--download-missing" => download_missing = true,
             "--no-download-missing" => download_missing = false,
             "--country" => {
@@ -128,27 +162,43 @@ async fn run(args: Vec<String>) -> Result<(), WizPatchError> {
                         WizPatchError::Protocol("--jobs needs a positive integer".into())
                     })?;
             }
+            "--small-jobs" => {
+                i += 1;
+                small_jobs = args
+                    .get(i)
+                    .and_then(|s| s.parse().ok())
+                    .filter(|&n: &usize| n >= 1)
+                    .ok_or_else(|| {
+                        WizPatchError::Protocol("--small-jobs needs a positive integer".into())
+                    })?;
+            }
             "-v" | "--verbose" => verbose = true,
             "-h" | "--help" | "help" => {
                 usage();
                 return Ok(());
             }
-            other => {
+            other if other.starts_with('-') => {
                 eprintln!("Unknown argument: {other}");
                 usage();
                 process::exit(1);
             }
+            // A bare token is a glob/substring selector.
+            other => globs.push(other.to_string()),
         }
         i += 1;
     }
 
-    if !do_patch {
-        println!("--no-patch given; nothing to do.");
-        return Ok(());
+    if mode == Mode::Search && globs.is_empty() {
+        eprintln!("Error: `search` needs at least one glob/substring to match.");
+        usage();
+        process::exit(1);
     }
 
     let platform = platform.unwrap_or_else(default_platform);
 
+    // Search and download never read local files, so a real install path is
+    // not strictly required — but patch (and the path-join for downloads) need
+    // somewhere to write. Auto-detect as before.
     let game_path = match game_path {
         Some(p) => p,
         None => match default_game_path(platform) {
@@ -156,6 +206,7 @@ async fn run(args: Vec<String>) -> Result<(), WizPatchError> {
                 println!("Auto-detected install: {}", p.display());
                 p
             }
+            None if mode == Mode::Search => PathBuf::new(),
             None => {
                 eprintln!(
                     "Error: could not auto-detect a Wizard101 install on this OS — pass --path <DIR>."
@@ -170,20 +221,26 @@ async fn run(args: Vec<String>) -> Result<(), WizPatchError> {
         platform,
         country,
         revision,
+        mode,
+        globs,
         download_missing,
         game_path,
         jobs,
+        small_jobs,
         verbose,
     };
 
     let stats = patch(&opts).await?;
-    println!(
-        "\nDone. {} downloaded, {} up-to-date, {} skipped (missing), {} failed (of {} records).",
-        stats.downloaded,
-        stats.up_to_date,
-        stats.skipped_missing,
-        stats.failed,
-        stats.total
-    );
+    match mode {
+        Mode::Search => {} // run_search already printed everything
+        _ => println!(
+            "\nDone. {} downloaded, {} up-to-date, {} skipped (missing), {} failed (of {} records).",
+            stats.downloaded,
+            stats.up_to_date,
+            stats.skipped_missing,
+            stats.failed,
+            stats.total
+        ),
+    }
     Ok(())
 }

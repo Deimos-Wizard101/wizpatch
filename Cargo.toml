@@ -3,7 +3,7 @@ name = "wizpatch"
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
-description = "Rust port of the wizdiff library for querying Wizard101 patch servers."
+description = "High performance Wizard101 patcher, downloader."
 
 [lib]
 name = "wizpatch"
@@ -24,4 +24,3 @@ async-channel = "2"
 ureq = { version = "2", default-features = false, features = ["tls"] }
 quick-xml = "0.36"
 thiserror = "1"
-crc32fast = "1"
