@@ -5,4 +5,5 @@
 # gives reproducible builds (and the Nix flake needs it tracked).
 .*
 !.gitignore
+!.github
 wizard101/
