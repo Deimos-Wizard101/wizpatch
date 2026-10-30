@@ -5,6 +5,4 @@
 # gives reproducible builds (and the Nix flake needs it tracked).
 .*
 !.gitignore
-Cargo.lock
-flake.lock
 wizard101/
